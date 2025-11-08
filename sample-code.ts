@@ -11,7 +11,6 @@ import { parse } from 'csv-parse/sync';
 
 const STORAGE_STATE_PATH = process.env.STORAGE_STATE_PATH ?? 'state.json';
 const SHOULD_PERSIST_STATE = process.env.PERSIST_STORAGE_STATE !== 'false';
-// const ACCOUNT_NAME = process.env.ACCOUNT_NAME ?? 'FIVES WORKWEAR';
 const ACCOUNT_NAME = process.env.ACCOUNT_NAME ?? 'ワークウェアショップ KeyPoint';
 const REGION_NAME = process.env.REGION_NAME ?? '日本';
 const PRODUCT_IDENTIFIER =
@@ -56,13 +55,15 @@ const EMAIL_INPUT_NAME =
 const PASSWORD_INPUT_NAME = 'パスワード';
 const OTP_INPUT_NAME = 'コードを入力する:';
 
-interface ListingTask {
+export type AccountName = 'FIVES WORKWEAR' | 'ワークウェアショップ KeyPoint';
+
+export interface ListingTask {
   productId: string;
   price: string;
   stock: string;
 }
 
-type ListingResultStatus =
+export type ListingResultStatus =
   | 'no_results'
   | 'brand_permission_required'
   | 'duplicate_sku'
@@ -70,10 +71,39 @@ type ListingResultStatus =
   | 'error'
   |'invalid_input';
 
-interface ListingResult {
+export interface ListingResult {
   productId: string;
   status: ListingResultStatus;
   message: string;
+}
+
+export interface AmazonEntryRunOptions {
+  tasks?: ListingTask[];
+  headless?: boolean;
+  slowMo?: number;
+  storageStatePath?: string;
+  shouldPersistState?: boolean;
+  listingCsvPath?: string;
+  resultCsvPath?: string;
+  listingProcessTimeoutMs?: number;
+  accountName?: AccountName;
+  regionName?: string;
+  productIdentifier?: string;
+  inventoryCount?: string;
+  productPrice?: string;
+  abortSignal?: AbortSignal;
+  onListingProgress?: (payload: {
+    total: number;
+    processed: number;
+    productId?: string;
+    status:
+      | 'started'
+      | 'item:start'
+      | 'item:success'
+      | 'item:error'
+      | 'completed';
+    message?: string;
+  }) => void;
 }
 
 function isTimeoutError(error: unknown): boolean {
@@ -201,22 +231,25 @@ function sanitizeNumericValue(
   return cleaned.length > 0 ? cleaned : fallback;
 }
 
-function createFallbackTask(): ListingTask {
+function createFallbackTask(overrides?: Partial<ListingTask>): ListingTask {
   return {
-    productId: PRODUCT_IDENTIFIER,
-    price: PRODUCT_PRICE,
-    stock: INVENTORY_COUNT,
+    productId: overrides?.productId ?? PRODUCT_IDENTIFIER,
+    price: overrides?.price ?? PRODUCT_PRICE,
+    stock: overrides?.stock ?? INVENTORY_COUNT,
   };
 }
 
-function loadListingTasks(): ListingTask[] {
-  if (!existsSync(LISTING_CSV_PATH)) {
-    return [createFallbackTask()];
+function loadListingTasks(
+  listingCsvPath: string,
+  fallbackTask: ListingTask,
+): ListingTask[] {
+  if (!existsSync(listingCsvPath)) {
+    return [fallbackTask];
   }
 
-  const raw = readFileSync(LISTING_CSV_PATH, 'utf8').trim();
+  const raw = readFileSync(listingCsvPath, 'utf8').trim();
   if (!raw) {
-    return [createFallbackTask()];
+    return [fallbackTask];
   }
 
   let records: Record<string, string>[];
@@ -229,9 +262,8 @@ function loadListingTasks(): ListingTask[] {
       relax_column_count: true,
     }) as Record<string, string>[];
   } catch (error) {
-    // eslint-disable-next-line no-console
     console.warn('Failed to parse CSV file, falling back to env defaults.', error);
-    return [createFallbackTask()];
+    return [fallbackTask];
   }
 
   const tasks: ListingTask[] = [];
@@ -265,7 +297,7 @@ function loadListingTasks(): ListingTask[] {
     });
   }
 
-  return tasks.length > 0 ? tasks : [createFallbackTask()];
+  return tasks.length > 0 ? tasks : [fallbackTask];
 }
 
 function escapeCsvValue(value: string): string {
@@ -276,7 +308,13 @@ function escapeCsvValue(value: string): string {
   return normalized;
 }
 
-function writeListingResults(results: ListingResult[]): void {
+function writeListingResults(
+  results: ListingResult[],
+  resultCsvPath?: string,
+): void {
+  if (!resultCsvPath) {
+    return;
+  }
   const header = 'productId,status,message\n';
   const body = results
     .map((result) =>
@@ -288,7 +326,7 @@ function writeListingResults(results: ListingResult[]): void {
     )
     .join('\n');
   writeFileSync(
-    RESULT_CSV_PATH,
+    resultCsvPath,
     body.length > 0 ? `${header}${body}\n` : header,
     'utf8',
   );
@@ -298,13 +336,17 @@ async function navigateToProductSearch(page: Page): Promise<void> {
   await page.goto(PRODUCT_SEARCH_URL, { waitUntil: 'domcontentloaded' });
 }
 
-async function selectAccountAndRegion(page: Page): Promise<void> {
-  const accountButton = page.getByRole('button', { name: ACCOUNT_NAME });
+async function selectAccountAndRegion(
+  page: Page,
+  accountName: string,
+  regionName: string,
+): Promise<void> {
+  const accountButton = page.getByRole('button', { name: accountName });
 
     await accountButton.first().click();
 
 
-  const regionButton = page.getByRole('button', { name: REGION_NAME });
+  const regionButton = page.getByRole('button', { name: regionName });
 
     await regionButton.first().click();
 
@@ -467,41 +509,101 @@ if (!hasRegisterButton) {
   }
 }
 
-async function run(): Promise<void> {
+export async function runAmazonEntry(
+  options: AmazonEntryRunOptions = {},
+): Promise<ListingResult[]> {
   const listingResults: ListingResult[] = [];
+  const headless = options.headless ?? HEADLESS;
+  const slowMo =
+    options.slowMo ?? (Number.isNaN(SLOW_MO) ? undefined : SLOW_MO);
+  const storageStatePath = options.storageStatePath ?? STORAGE_STATE_PATH;
+  const shouldPersistState =
+    options.shouldPersistState ?? SHOULD_PERSIST_STATE;
+  const listingCsvPath = options.listingCsvPath ?? LISTING_CSV_PATH;
+  const resultCsvPath = options.resultCsvPath ?? RESULT_CSV_PATH;
+  const listingProcessTimeoutMs =
+    options.listingProcessTimeoutMs ?? LISTING_PROCESS_TIMEOUT_MS;
+  const accountName = options.accountName ?? ACCOUNT_NAME;
+  const regionName = options.regionName ?? REGION_NAME;
+  const fallbackTask = createFallbackTask({
+    productId: options.productIdentifier,
+    stock: options.inventoryCount,
+    price: options.productPrice,
+  });
+
   const browser: Browser = await chromium.launch({
-    headless: HEADLESS,
-    slowMo: Number.isNaN(SLOW_MO) ? undefined : SLOW_MO,
+    headless,
+    slowMo,
   });
 
   let context: BrowserContext | undefined;
+  const { abortSignal, onListingProgress } = options;
+  let processedCount = 0;
+  const abortHandler = async (): Promise<void> => {
+    try {
+      if (context) {
+        await context.close();
+      }
+    } catch {
+      // ignore
+    }
+    try {
+      await browser.close();
+    } catch {
+      // ignore
+    }
+  };
+
+  abortSignal?.addEventListener('abort', abortHandler, { once: true });
+  let listings: ListingTask[] = [];
+  let total = 0;
   try {
     context = await browser.newContext(
       undefined,
     );
 
-    context.setDefaultTimeout(LISTING_PROCESS_TIMEOUT_MS);
-    context.setDefaultNavigationTimeout(LISTING_PROCESS_TIMEOUT_MS);
+    context.setDefaultTimeout(listingProcessTimeoutMs);
+    context.setDefaultNavigationTimeout(listingProcessTimeoutMs);
 
     const page: Page = await context.newPage();
     await page.goto(SIGN_IN_URL, { waitUntil: 'domcontentloaded' });
     await ensureSignedIn(page);
 
-    const listings = loadListingTasks();
-    // await navigateToProductSearch(page);
-    await selectAccountAndRegion(page);
+    listings = options.tasks ??
+      loadListingTasks(listingCsvPath, fallbackTask);
+    total = listings.length;
+    onListingProgress?.({
+      status: 'started',
+      processed: 0,
+      total,
+    });
+    await selectAccountAndRegion(page, accountName, regionName);
     const timedOutListings: string[] = [];
     for (const listing of listings) {
-      // eslint-disable-next-line no-console
+      if (abortSignal?.aborted) {
+        throw new Error('Listing run aborted');
+      }
       console.log(`Processing JAN: ${listing.productId}`);
+      onListingProgress?.({
+        status: 'item:start',
+        productId: listing.productId,
+        processed: processedCount,
+        total,
+      });
       try {
         const result = await processListing(page, listing);
         if (result) {
           listingResults.push(result);
         }
+        processedCount += 1;
+        onListingProgress?.({
+          status: 'item:success',
+          productId: listing.productId,
+          processed: processedCount,
+          total,
+        });
       } catch (error) {
         if (isTimeoutError(error)) {
-          // eslint-disable-next-line no-console
           console.warn(
             `Processing timed out for JAN: ${listing.productId}`,
             error,
@@ -512,6 +614,14 @@ async function run(): Promise<void> {
             status: 'timeout',
             message: 'Processing timed out before completion.',
           });
+          processedCount += 1;
+          onListingProgress?.({
+            status: 'item:error',
+            productId: listing.productId,
+            processed: processedCount,
+            total,
+            message: 'timeout',
+          });
           continue;
         }
         listingResults.push({
@@ -520,18 +630,25 @@ async function run(): Promise<void> {
           message:
             error instanceof Error ? error.message : 'Unknown processing error.',
         });
+        processedCount += 1;
+        onListingProgress?.({
+          status: 'item:error',
+          productId: listing.productId,
+          processed: processedCount,
+          total,
+          message: error instanceof Error ? error.message : 'error',
+        });
         throw error;
       }
     }
 
     if (timedOutListings.length > 0) {
-      // eslint-disable-next-line no-console
       console.log('Timed out JAN(s):', timedOutListings.join(', '));
     }
 
-    // if (context && SHOULD_PERSIST_STATE) {
-    //   await context.storageState({ path: STORAGE_STATE_PATH });
-    // }
+    if (context && shouldPersistState) {
+      await context.storageState({ path: storageStatePath });
+    }
   } finally {
     try {
       if (context) {
@@ -539,14 +656,20 @@ async function run(): Promise<void> {
       }
       await browser.close();
     } finally {
-      writeListingResults(listingResults);
+      writeListingResults(listingResults, resultCsvPath);
+      onListingProgress?.({
+        status: 'completed',
+        processed: processedCount,
+        total,
+      });
+      abortSignal?.removeEventListener('abort', abortHandler);
     }
   }
+  return listingResults;
 }
 
 if (require.main === module) {
-  run().catch((error) => {
-    // eslint-disable-next-line no-console
+  runAmazonEntry().catch((error) => {
     console.error(error);
     process.exitCode = 1;
   });
