@@ -1,6 +1,6 @@
 'use client';
 
-import type { ChangeEvent } from 'react';
+import type { ChangeEvent, MouseEvent } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { parse } from 'csv-parse/browser/esm/sync';
 import {
@@ -8,8 +8,10 @@ import {
   type AccountName,
   type EntryItem,
   type EntryResult,
+  type ErrorType,
 } from '@/app/types';
 import type { PostAmazonEntryRequest } from '@/app/dto';
+import { getErrorTypeDescription } from '@/app/constants/errorTypeDescription';
 
 type RunStatus = 'idle' | 'running' | 'completed' | 'error' | 'aborted';
 
@@ -47,6 +49,13 @@ const STATUS_LABEL: Record<RunStatus, string> = {
 };
 
 const JAN_PATTERN = /^\d{13}$/;
+
+const SAMPLE_IMPORT_CSV = `JAN,price,stock
+4549957721409,11800,5
+4549957722512,9800,3
+4974019907609,5980,12
+4580053450012,7800,8
+4984824921234,4500,20`;
 
 const normalizeNumericString = (value: string): string =>
   value.replace(/,/g, '').trim();
@@ -119,6 +128,7 @@ export default function HomePage(): JSX.Element {
   const [resultCsv, setResultCsv] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [currentProductId, setCurrentProductId] = useState<string | undefined>();
+  const [errorModalMessage, setErrorModalMessage] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const selectedRecords = useMemo(
@@ -215,6 +225,47 @@ export default function HomePage(): JSX.Element {
   const handleFileButtonClick = useCallback(() => {
     fileInputRef.current?.click();
   }, []);
+
+  const handleDownloadSampleCsv = useCallback(() => {
+    const blob = new Blob([SAMPLE_IMPORT_CSV], {
+      type: 'text/csv;charset=utf-8;',
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'sample-import.csv';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }, []);
+
+  const handleErrorTypeClick = useCallback(
+    (type?: ErrorType, event?: MouseEvent<HTMLButtonElement>) => {
+      if (!type) {
+        return;
+      }
+      event?.preventDefault();
+      event?.stopPropagation();
+      setErrorModalMessage(getErrorTypeDescription(type));
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (!errorModalMessage) {
+      return undefined;
+    }
+    const handleEsc = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') {
+        setErrorModalMessage(null);
+      }
+    };
+    window.addEventListener('keydown', handleEsc);
+    return () => {
+      window.removeEventListener('keydown', handleEsc);
+    };
+  }, [errorModalMessage]);
 
   const toggleSelect = useCallback((id: string) => {
     setSelectedIds((prev) => {
@@ -334,6 +385,13 @@ export default function HomePage(): JSX.Element {
           </button>
           <button
             type="button"
+            onClick={handleDownloadSampleCsv}
+            className="rounded border border-blue-500 px-4 py-2 text-sm font-medium text-blue-600 hover:bg-blue-50"
+          >
+            サンプルCSVをダウンロード
+          </button>
+          <button
+            type="button"
             onClick={toggleSelectAll}
             className="rounded border border-zinc-300 px-4 py-2 text-sm hover:bg-zinc-50"
             disabled={records.length === 0}
@@ -402,33 +460,24 @@ export default function HomePage(): JSX.Element {
         )}
       </section>
 
-      <section className="rounded-lg border border-zinc-200 bg-white p-6 shadow-sm">
-        <h2 className="text-lg font-semibold">3. 出品実行設定</h2>
-        <div className="mt-4 grid gap-4 sm:grid-cols-2">
-          <label className="flex flex-col gap-1 text-sm">
-            <span className="font-medium">使用アカウント</span>
-            <select
-              value={accountName}
-              onChange={(event) => setAccountName(event.target.value as AccountName)}
-              className="rounded border border-zinc-300 px-3 py-2"
-            >
-              {ACCOUNT_OPTIONS.map((option) => (
-                <option key={option} value={option}>
-                  {option}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="flex items-center gap-3 text-sm">
-            <input
-              type="checkbox"
-              checked={showBrowser}
-              onChange={(event) => setShowBrowser(event.target.checked)}
-              className="h-4 w-4"
-            />
-            <span>実行画面を表示</span>
-          </label>
-        </div>
+  <section className="rounded-lg border border-zinc-200 bg-white p-6 shadow-sm">
+    <h2 className="text-lg font-semibold">3. 出品実行設定</h2>
+    <div className="mt-4 grid gap-4 sm:grid-cols-2">
+      <label className="flex flex-col gap-1 text-sm">
+        <span className="font-medium">使用アカウント</span>
+        <select
+          value={accountName}
+          onChange={(event) => setAccountName(event.target.value as AccountName)}
+          className="rounded border border-zinc-300 px-3 py-2"
+        >
+          {ACCOUNT_OPTIONS.map((option) => (
+            <option key={option} value={option}>
+              {option}
+            </option>
+          ))}
+        </select>
+      </label>
+    </div>
         <div className="mt-6 flex flex-wrap gap-3">
           <button
             type="button"
@@ -489,7 +538,19 @@ export default function HomePage(): JSX.Element {
                   >
                     <td className="p-2 font-mono text-xs">{result.JANCode}</td>
                     <td className="p-2">{result.success ? '成功' : '失敗'}</td>
-                    <td className="p-2">{result.errorType ?? '-'}</td>
+                    <td className="p-2">
+                      {result.errorType ? (
+                        <button
+                          type="button"
+                          className="text-blue-600 underline underline-offset-2"
+                          onClick={(event) => handleErrorTypeClick(result.errorType, event)}
+                        >
+                          {result.errorType}
+                        </button>
+                      ) : (
+                        '-'
+                      )}
+                    </td>
                     <td className="p-2 text-xs text-zinc-600">
                       {result.errorMessage ?? (result.success ? '出品が完了しました。' : '-')}
                     </td>
@@ -509,6 +570,33 @@ export default function HomePage(): JSX.Element {
           </a>
         )}
       </section>
+      {errorModalMessage && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center">
+          <button
+            type="button"
+            aria-label="エラー詳細を閉じる"
+            className="absolute inset-0 h-full w-full bg-black/40"
+            onClick={() => setErrorModalMessage(null)}
+          />
+          <div
+            role="dialog"
+            aria-modal="true"
+            className="relative z-50 w-full max-w-sm rounded-lg border border-zinc-200 bg-white p-6 shadow-2xl"
+          >
+            <h3 className="text-base font-semibold text-zinc-900">エラー詳細</h3>
+            <p className="mt-3 text-sm text-zinc-700">{errorModalMessage}</p>
+            <div className="mt-4 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setErrorModalMessage(null)}
+                className="rounded bg-blue-600 px-4 py-1.5 text-sm text-white hover:bg-blue-700"
+              >
+                閉じる
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
