@@ -1,16 +1,22 @@
 'use client';
 
 import type { ChangeEvent } from 'react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { parse } from 'csv-parse/browser/esm/sync';
-import type { AccountName, ListingResult, ListingTask } from '@/sample-code';
+import {
+  ACCOUNT_NAME,
+  type AccountName,
+  type EntryItem,
+  type EntryResult,
+} from '@/app/types';
+import type { PostAmazonEntryRequest } from '@/app/dto';
 
 type RunStatus = 'idle' | 'running' | 'completed' | 'error' | 'aborted';
 
 interface ApiState {
   status: RunStatus;
   progress: { total: number; processed: number };
-  results: ListingResult[];
+  results: EntryResult[];
   runId?: string;
   startedAt?: number;
   finishedAt?: number;
@@ -30,10 +36,7 @@ interface ParsedRecord {
   errors: string[];
 }
 
-const ACCOUNT_OPTIONS: AccountName[] = [
-  'FIVES WORKWEAR',
-  'ワークウェアショップ KeyPoint',
-];
+const ACCOUNT_OPTIONS = Object.values(ACCOUNT_NAME) as AccountName[];
 
 const STATUS_LABEL: Record<RunStatus, string> = {
   idle: '待機中',
@@ -45,18 +48,21 @@ const STATUS_LABEL: Record<RunStatus, string> = {
 
 const JAN_PATTERN = /^\d{13}$/;
 
+const normalizeNumericString = (value: string): string =>
+  value.replace(/,/g, '').trim();
+
 function validateRecord(record: Omit<ParsedRecord, 'id' | 'errors'>): string[] {
   const errors: string[] = [];
   if (!JAN_PATTERN.test(record.productId)) {
     errors.push('JAN は13桁の数字で入力してください');
   }
 
-  const priceValue = Number(record.price);
+  const priceValue = Number(normalizeNumericString(record.price));
   if (!Number.isFinite(priceValue) || priceValue < 0) {
     errors.push('price は 0 以上の数値で入力してください');
   }
 
-  const stockValue = Number(record.stock);
+  const stockValue = Number(normalizeNumericString(record.stock));
   if (!Number.isFinite(stockValue) || stockValue < 0) {
     errors.push('stock は 0 以上の数値で入力してください');
   }
@@ -101,7 +107,7 @@ function buildParsedRecords(text: string): ParsedRecord[] {
 export default function HomePage(): JSX.Element {
   const [records, setRecords] = useState<ParsedRecord[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [showBrowser, setShowBrowser] = useState(false);
+  const [showBrowser, setShowBrowser] = useState(true);
   const [accountName, setAccountName] = useState<AccountName>(
     'ワークウェアショップ KeyPoint',
   );
@@ -109,10 +115,11 @@ export default function HomePage(): JSX.Element {
   const [progress, setProgress] = useState<{ total: number; processed: number }>(
     { total: 0, processed: 0 },
   );
-  const [results, setResults] = useState<ListingResult[]>([]);
+  const [results, setResults] = useState<EntryResult[]>([]);
   const [resultCsv, setResultCsv] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [currentProductId, setCurrentProductId] = useState<string | undefined>();
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const selectedRecords = useMemo(
     () => records.filter((record) => selectedIds.has(record.id)),
@@ -205,6 +212,10 @@ export default function HomePage(): JSX.Element {
     [],
   );
 
+  const handleFileButtonClick = useCallback(() => {
+    fileInputRef.current?.click();
+  }, []);
+
   const toggleSelect = useCallback((id: string) => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
@@ -240,13 +251,13 @@ export default function HomePage(): JSX.Element {
     setResultCsv(null);
 
     try {
-      const payload = {
-        records: validSelectedRecords.map<ListingTask>((record) => ({
-          productId: record.productId,
-          price: record.price,
-          stock: record.stock,
+      const payload: PostAmazonEntryRequest = {
+        EntryItems: validSelectedRecords.map<EntryItem>((record) => ({
+          JANCode: record.productId,
+          price: Number(normalizeNumericString(record.price)),
+          stock: Number(normalizeNumericString(record.stock)),
         })),
-        showBrowser,
+        isHeadless: !showBrowser,
         accountName,
       };
       const response = await fetch('/api/amazon-entry', {
@@ -306,11 +317,21 @@ export default function HomePage(): JSX.Element {
         <h2 className="text-lg font-semibold">1. CSV インポート</h2>
         <div className="mt-4 flex flex-col gap-4 sm:flex-row sm:items-center">
           <input
+            ref={fileInputRef}
             type="file"
             accept=".csv"
             onChange={handleFileChange}
-            className="text-sm"
+            className="hidden"
+            aria-hidden="true"
+            tabIndex={-1}
           />
+          <button
+            type="button"
+            onClick={handleFileButtonClick}
+            className="rounded border border-zinc-300 px-4 py-2 text-sm font-medium hover:bg-zinc-50"
+          >
+            CSVファイルを選択
+          </button>
           <button
             type="button"
             onClick={toggleSelectAll}
@@ -340,7 +361,7 @@ export default function HomePage(): JSX.Element {
                   <th className="p-2">JAN</th>
                   <th className="p-2">price</th>
                   <th className="p-2">stock</th>
-                  <th className="p-2">検証結果</th>
+                  <th className="p-2">データ整合性チェック</th>
                 </tr>
               </thead>
               <tbody>
@@ -405,7 +426,7 @@ export default function HomePage(): JSX.Element {
               onChange={(event) => setShowBrowser(event.target.checked)}
               className="h-4 w-4"
             />
-            <span>ブラウザを表示（Playwright ヘッドレス解除）</span>
+            <span>実行画面を表示</span>
           </label>
         </div>
         <div className="mt-6 flex flex-wrap gap-3">
@@ -456,15 +477,22 @@ export default function HomePage(): JSX.Element {
                 <tr className="border-b bg-zinc-50 text-xs uppercase tracking-wide text-zinc-500">
                   <th className="p-2">JAN</th>
                   <th className="p-2">ステータス</th>
+                  <th className="p-2">エラー種別</th>
                   <th className="p-2">メッセージ</th>
                 </tr>
               </thead>
               <tbody>
                 {results.map((result) => (
-                  <tr key={`${result.productId}-${result.status}-${result.message}`} className="border-b last:border-0">
-                    <td className="p-2 font-mono text-xs">{result.productId}</td>
-                    <td className="p-2">{result.status}</td>
-                    <td className="p-2 text-xs text-zinc-600">{result.message}</td>
+                  <tr
+                    key={`${result.JANCode}-${result.success}-${result.errorType ?? 'ok'}`}
+                    className="border-b last:border-0"
+                  >
+                    <td className="p-2 font-mono text-xs">{result.JANCode}</td>
+                    <td className="p-2">{result.success ? '成功' : '失敗'}</td>
+                    <td className="p-2">{result.errorType ?? '-'}</td>
+                    <td className="p-2 text-xs text-zinc-600">
+                      {result.errorMessage ?? (result.success ? '出品が完了しました。' : '-')}
+                    </td>
                   </tr>
                 ))}
               </tbody>

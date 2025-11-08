@@ -1,15 +1,33 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
-  runAmazonEntry,
-  type ListingResult,
-  type ListingTask,
+  buildSuccessResult,
+  ensureAccountName,
+  enterProductDetails,
+  isTimeoutError,
+  launchAmazonBrowser,
+  searchAinoriProduct,
+  signInAmazon,
+} from '@/app/services/amazon-operations';
+import {
+  ACCOUNT_NAME,
   type AccountName,
-} from '@/sample-code';
+  type EntryItem,
+  type EntryResult,
+  ERROR_TYPE,
+} from '@/app/types';
+import type { PostAmazonEntryRequest } from '@/app/dto';
 
 export const runtime = 'nodejs';
 
-type RunStatus = 'idle' | 'running' | 'completed' | 'error' | 'aborted';
+const SIGN_IN_EMAIL =
+  process.env.LOGIN_EMAIL;
+const SIGN_IN_PASSWORD =
+  process.env.LOGIN_PASSWORD;
+const SIGN_IN_OTP_SECRET =
+  process.env.AUTHENTICATOR_SECRET;
 
+type RunStatus = 'idle' | 'running' | 'completed' | 'error' | 'aborted';
+const LISTING_PROCESS_TIMEOUT_MS = 10000;
 interface ProgressState {
   total: number;
   processed: number;
@@ -18,7 +36,7 @@ interface ProgressState {
 interface PublicRunState {
   status: RunStatus;
   progress: ProgressState;
-  results: ListingResult[];
+  results: EntryResult[];
   runId?: string;
   startedAt?: number;
   finishedAt?: number;
@@ -35,10 +53,7 @@ interface InternalRunState extends PublicRunState {
   runPromise?: Promise<void>;
 }
 
-const ACCOUNT_OPTIONS: AccountName[] = [
-  'FIVES WORKWEAR',
-  'ワークウェアショップ KeyPoint',
-];
+const ACCOUNT_OPTIONS = Object.values(ACCOUNT_NAME) as AccountName[];
 
 let runCounter = 0;
 let runState: InternalRunState = {
@@ -47,6 +62,9 @@ let runState: InternalRunState = {
   results: [],
 };
 
+/**
+ * CSV に書き出す値をクォート・エスケープします。
+ */
 function escapeCsvValue(value: string): string {
   if (/[",\n]/.test(value)) {
     return `"${value.replace(/"/g, '""')}"`;
@@ -54,16 +72,29 @@ function escapeCsvValue(value: string): string {
   return value;
 }
 
-function buildResultCsv(results: ListingResult[]): string {
-  const header = 'productId,status,message';
+/**
+ * 出品結果の配列をダウンロード用 CSV テキストに変換します。
+ */
+function buildResultCsv(results: EntryResult[]): string {
+  const header = 'JANCode,success,errorType,errorMessage';
   const body = results
     .map((result) =>
-      [result.productId, result.status, result.message].map(escapeCsvValue).join(','),
+      [
+        result.JANCode,
+        String(result.success),
+        result.errorType ?? '',
+        result.errorMessage ?? '',
+      ]
+        .map(escapeCsvValue)
+        .join(','),
     )
     .join('\n');
   return body ? `${header}\n${body}` : `${header}\n`;
 }
 
+/**
+ * 内部で保持している実行状態から、クライアントへ返す情報だけを抽出します。
+ */
 function serializeState(): PublicRunState {
   const { controller, runPromise, ...rest } = runState;
   void controller;
@@ -71,10 +102,16 @@ function serializeState(): PublicRunState {
   return rest;
 }
 
+/**
+ * 現在の実行ステータスを取得するエンドポイント。
+ */
 export async function GET(): Promise<NextResponse<PublicRunState>> {
   return NextResponse.json(serializeState());
 }
 
+/**
+ * 進行中の出品処理を強制停止するエンドポイント。
+ */
 export async function DELETE(): Promise<NextResponse<PublicRunState>> {
   if (runState.status !== 'running' || !runState.controller) {
     return NextResponse.json(serializeState(), { status: 409 });
@@ -84,6 +121,9 @@ export async function DELETE(): Promise<NextResponse<PublicRunState>> {
   return NextResponse.json(serializeState());
 }
 
+/**
+ * 出品処理を開始するエンドポイント。CSV から渡されたレコードを順次登録します。
+ */
 export async function POST(
   request: NextRequest,
 ): Promise<NextResponse<PublicRunState | { error: string }>> {
@@ -94,11 +134,7 @@ export async function POST(
     );
   }
 
-  let payload: {
-    records?: ListingTask[];
-    showBrowser?: boolean;
-    accountName?: AccountName;
-  };
+  let payload: PostAmazonEntryRequest;
   try {
     payload = await request.json();
   } catch {
@@ -108,7 +144,7 @@ export async function POST(
     );
   }
 
-  const records = payload.records ?? [];
+  const records = payload.EntryItems ?? [];
   if (!Array.isArray(records) || records.length === 0) {
     return NextResponse.json(
       { error: '出品対象のレコードが存在しません。' },
@@ -116,7 +152,8 @@ export async function POST(
     );
   }
 
-  const accountName = payload.accountName ?? 'ワークウェアショップ KeyPoint';
+  const accountName =
+    payload.accountName;
   if (!ACCOUNT_OPTIONS.includes(accountName)) {
     return NextResponse.json(
       { error: '選択できないアカウント名が指定されました。' },
@@ -124,15 +161,43 @@ export async function POST(
     );
   }
 
-  const sanitizedRecords: ListingTask[] = records.map((record) => ({
-    productId: String(record.productId ?? '').trim(),
-    price: String(record.price ?? '').trim(),
-    stock: String(record.stock ?? '').trim(),
-  }));
+  const sanitizedRecords: EntryItem[] = records.map((record) => {
+    const janValue =
+      (record as EntryItem).JANCode ??
+      (record as { productId?: string }).productId ??
+      '';
+    const priceValue = Number(
+      (record as EntryItem).price ?? (record as { price?: number | string }).price,
+    );
+    const stockValue = Number(
+      (record as EntryItem).stock ?? (record as { stock?: number | string }).stock,
+    );
 
-  if (sanitizedRecords.some((record) => !record.productId)) {
+    return {
+      JANCode: String(janValue).trim(),
+      price: priceValue,
+      stock: stockValue,
+    };
+  });
+
+  if (sanitizedRecords.some((record) => !record.JANCode)) {
     return NextResponse.json(
       { error: 'JAN が空のレコードがあります。' },
+      { status: 400 },
+    );
+  }
+
+  if (
+    sanitizedRecords.some(
+      (record) =>
+        !Number.isFinite(record.price) ||
+        !Number.isFinite(record.stock) ||
+        record.price < 0 ||
+        record.stock < 0,
+    )
+  ) {
+    return NextResponse.json(
+      { error: 'price と stock には 0 以上の数値を指定してください。' },
       { status: 400 },
     );
   }
@@ -149,49 +214,157 @@ export async function POST(
     finishedAt: undefined,
     error: undefined,
     accountName,
-    headless: !(payload.showBrowser ?? false),
+    headless: payload.isHeadless,
     controller,
     currentProductId: undefined,
     lastMessage: undefined,
     resultCsv: undefined,
   };
 
-  const runPromise = runAmazonEntry({
-    tasks: sanitizedRecords,
-    headless: runState.headless,
-    accountName,
-    abortSignal: controller.signal,
-    onListingProgress: ({ total, processed, productId, status, message }) => {
+  const runPromise = (async () => {
+    const { browser, context, page } = await launchAmazonBrowser({
+      headless: runState.headless,
+      timeoutMs: LISTING_PROCESS_TIMEOUT_MS,
+    });
+
+    const abortHandler = async (): Promise<void> => {
+      try {
+        await context.close();
+      } catch {
+        // noop
+      }
+      try {
+        await browser.close();
+      } catch {
+        // noop
+      }
+    };
+
+    controller.signal.addEventListener('abort', abortHandler, { once: true });
+
+    const ensureProgressUpdate = (processed: number, total: number): void => {
       runState.progress = { total, processed };
-      if (productId) {
-        runState.currentProductId = productId;
+    };
+
+    const total = sanitizedRecords.length;
+    let processed = 0;
+    let lastMessage: string | undefined;
+    const accountToUse = ensureAccountName(accountName);
+
+    const pushResult = (result: EntryResult): void => {
+      if (result.errorMessage) {
+        lastMessage = result.errorMessage;
       }
-      if (message) {
-        runState.lastMessage = message;
+      const nextResults = [...runState.results, result];
+      runState.results = nextResults;
+      runState.lastMessage = result.errorMessage ?? lastMessage;
+    };
+
+    try {
+      // 環境変数を確認
+      if (!SIGN_IN_EMAIL || !SIGN_IN_PASSWORD || !SIGN_IN_OTP_SECRET) {
+        throw new Error('Amazon のサインイン情報が設定されていません。');
       }
-      if (status === 'completed') {
-        runState.currentProductId = undefined;
+      await signInAmazon({
+        page,
+        email: SIGN_IN_EMAIL,
+        password: SIGN_IN_PASSWORD,
+        otpSecret: SIGN_IN_OTP_SECRET,
+        accountName: accountToUse,
+      });
+
+      ensureProgressUpdate(processed, total);
+
+      for (const record of sanitizedRecords) {
+        if (controller.signal.aborted) {
+          throw new Error('ユーザーによって処理が中断されました。');
+        }
+
+        runState.currentProductId = record.JANCode;
+        lastMessage = undefined;
+
+        try {
+          const searchResult = await searchAinoriProduct(page, record.JANCode);
+          if (searchResult.error) {
+            pushResult(searchResult.error);
+            processed += 1;
+            ensureProgressUpdate(processed, total);
+            continue;
+          }
+
+          const entryResult = await enterProductDetails(
+            searchResult.listingPage!,
+            record,
+          );
+          if (entryResult) {
+            pushResult(entryResult);
+            processed += 1;
+            ensureProgressUpdate(processed, total);
+            continue;
+          }
+
+          const successResult = buildSuccessResult(record);
+          lastMessage = '出品が完了しました。';
+          pushResult(successResult);
+          processed += 1;
+          ensureProgressUpdate(processed, total);
+        } catch (error) {
+          const entryResult: EntryResult = isTimeoutError(error)
+            ? {
+                JANCode: record.JANCode,
+                success: false,
+                errorType: ERROR_TYPE.TIME_OUT,
+                errorMessage: '処理がタイムアウトしました。',
+              }
+            : {
+                JANCode: record.JANCode,
+                success: false,
+                errorType: ERROR_TYPE.INVALID_INPUT,
+                errorMessage:
+                  error instanceof Error
+                    ? error.message
+                    : '不明なエラーが発生しました。',
+              };
+          pushResult(entryResult);
+          processed += 1;
+          ensureProgressUpdate(processed, total);
+          if (!isTimeoutError(error)) {
+            throw error;
+          }
+        }
       }
-    },
-  })
-    .then((results) => {
-      runState.results = results;
+
       runState.finishedAt = Date.now();
       runState.status = controller.signal.aborted ? 'aborted' : 'completed';
-      runState.resultCsv = buildResultCsv(results);
+      runState.resultCsv = buildResultCsv(runState.results);
+      runState.currentProductId = undefined;
       runState.controller = undefined;
-    })
-    .catch((error: unknown) => {
-      runState.finishedAt = Date.now();
-      runState.results = runState.results.length ? runState.results : [];
-      if (controller.signal.aborted) {
-        runState.status = 'aborted';
-      } else {
-        runState.status = 'error';
-        runState.error = error instanceof Error ? error.message : '不明なエラーが発生しました。';
+    } finally {
+      controller.signal.removeEventListener('abort', abortHandler);
+      runState.currentProductId = undefined;
+      try {
+        await context.close();
+      } catch {
+        // noop
       }
-      runState.controller = undefined;
-    });
+      try {
+        await browser.close();
+      } catch {
+        // noop
+      }
+    }
+  })().catch((error: unknown) => {
+    runState.finishedAt = Date.now();
+    if (controller.signal.aborted) {
+      runState.status = 'aborted';
+    } else {
+      runState.status = 'error';
+      runState.error =
+        error instanceof Error ? error.message : '不明なエラーが発生しました。';
+    }
+    runState.resultCsv = buildResultCsv(runState.results);
+    runState.controller = undefined;
+  });
 
   runState.runPromise = runPromise;
 
