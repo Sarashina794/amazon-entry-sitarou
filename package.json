@@ -11,7 +11,14 @@
   "dependencies": {
     "react": "19.2.0",
     "react-dom": "19.2.0",
-    "next": "16.0.1"
+    "next": "16.0.1",
+    "csv-parse": "^5.6.0",
+    "jsqr": "^1.4.0",
+    "otpauth": "^9.4.1",
+    "otplib": "^12.0.1",
+    "playwright": "^1.56.1",
+    "pngjs": "^7.0.0",
+    "qrcode": "^1.5.4"
   },
   "devDependencies": {
     "typescript": "^5",
