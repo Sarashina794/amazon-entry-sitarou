@@ -136,7 +136,7 @@ const handleOtpChallenge = async (
       return;
     }
 
-    await page.waitForTimeout(1500);
+    await page.waitForTimeout(3000);
   }
 
   if ((await otpFieldLocator().count()) !== 0) {
@@ -208,7 +208,7 @@ export const searchAinoriProduct = async (
     .getByTestId('omnibox-submit-button')
     .getByRole('button', { name: '検索' })
     .click();
-  await page.waitForTimeout(1000);
+  await page.waitForTimeout(2000);
 
   const noResultsLocator = page
     .getByText('検索クエリに一致する結果が見つかりません')
@@ -258,7 +258,7 @@ export const searchAinoriProduct = async (
   await page.getByRole('button', { name: 'この商品を出品する' }).click();
   const listingPage = await listingPagePromise;
   await listingPage.waitForLoadState('domcontentloaded');
-
+	await page.waitForTimeout(1500);
   return { listingPage };
 };
 
@@ -311,7 +311,7 @@ export const enterProductDetails = async (
       listingPage.waitForLoadState('domcontentloaded'),
       registerButton.click(),
     ]);
-    await listingPage.waitForTimeout(1000);
+    await listingPage.waitForTimeout(2000);
     return null;
   } finally {
     await listingPage.close();
