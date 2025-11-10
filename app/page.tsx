@@ -1,6 +1,6 @@
 'use client';
 
-import type { ChangeEvent, MouseEvent } from 'react';
+import type { ChangeEvent, MouseEvent, JSX } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { parse } from 'csv-parse/browser/esm/sync';
 import {
@@ -383,7 +383,7 @@ export default function HomePage(): JSX.Element {
           price: Number(normalizeNumericString(record.price)),
           stock: Number(normalizeNumericString(record.stock)),
         })),
-        isHeadless: true,
+        isHeadless: false,
         accountName,
       };
       const response = await fetch('/api/amazon-entry', {
@@ -623,7 +623,7 @@ export default function HomePage(): JSX.Element {
               <p className="text-xs uppercase tracking-[0.3em] text-blue-500">Step 3</p>
               <h2 className="text-lg font-semibold text-zinc-900">出品実行設定</h2>
               <p className="mt-1 text-sm text-zinc-500">
-                実行アカウントを選択し、ヘッドレスモードでそのまま実行してください。
+                実行アカウントを選択し、実行。
               </p>
             </div>
             <span className="text-sm text-zinc-500">
