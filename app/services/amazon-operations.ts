@@ -258,7 +258,7 @@ export const searchAinoriProduct = async (
   await page.getByRole('button', { name: 'この商品を出品する' }).click();
   const listingPage = await listingPagePromise;
   await listingPage.waitForLoadState('domcontentloaded');
-	await page.waitForTimeout(1500);
+	await page.waitForTimeout(3000);
   return { listingPage };
 };
 
