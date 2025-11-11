@@ -68,6 +68,13 @@ const SAMPLE_IMPORT_CSV = `JAN,price,stock
 4580053450012,7800,8
 4984824921234,4500,20`;
 
+const LOCAL_STORAGE_KEYS = {
+  RECORDS: 'amazon-entry-records',
+  SELECTED_IDS: 'amazon-entry-selected-ids',
+  RESULTS: 'amazon-entry-results',
+  RESULT_CSV: 'amazon-entry-result-csv',
+};
+
 const normalizeNumericString = (value: string): string =>
   value.replace(/,/g, '').trim();
 
@@ -255,6 +262,63 @@ export default function HomePage(): JSX.Element {
   }, [fetchStatus]);
 
   useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    let restoredRecords: ParsedRecord[] = [];
+    try {
+      const storedRecords = window.localStorage.getItem(LOCAL_STORAGE_KEYS.RECORDS);
+      if (storedRecords) {
+        const parsed = JSON.parse(storedRecords) as ParsedRecord[];
+        if (Array.isArray(parsed)) {
+          restoredRecords = parsed.map((record) => ({
+            ...record,
+            errors: Array.isArray(record.errors) ? record.errors : [],
+          }));
+          setRecords(restoredRecords);
+        }
+      }
+    } catch (error) {
+      console.error('localStorage からレコードの読み込みに失敗しました', error);
+    }
+
+    try {
+      const storedSelectedIds = window.localStorage.getItem(LOCAL_STORAGE_KEYS.SELECTED_IDS);
+      if (storedSelectedIds && restoredRecords.length > 0) {
+        const parsed = JSON.parse(storedSelectedIds) as string[];
+        if (Array.isArray(parsed)) {
+          const validIds = parsed.filter((id) =>
+            restoredRecords.some((record) => record.id === id),
+          );
+          if (validIds.length > 0) {
+            setSelectedIds(new Set(validIds));
+          }
+        }
+      }
+    } catch (error) {
+      console.error('localStorage から選択状態の読み込みに失敗しました', error);
+    }
+
+    try {
+      const storedResults = window.localStorage.getItem(LOCAL_STORAGE_KEYS.RESULTS);
+      if (storedResults) {
+        const parsedResults = JSON.parse(storedResults) as EntryResult[];
+        if (Array.isArray(parsedResults)) {
+          setResults(parsedResults);
+        }
+      }
+    } catch (error) {
+      console.error('localStorage から結果の読み込みに失敗しました', error);
+    }
+
+    const storedResultCsv = window.localStorage.getItem(LOCAL_STORAGE_KEYS.RESULT_CSV);
+    if (storedResultCsv) {
+      setResultCsv(storedResultCsv);
+    }
+  }, []);
+
+  useEffect(() => {
     if (status !== 'running') {
       return undefined;
     }
@@ -265,6 +329,58 @@ export default function HomePage(): JSX.Element {
 
     return () => clearInterval(interval);
   }, [status, fetchStatus]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    if (records.length === 0) {
+      window.localStorage.removeItem(LOCAL_STORAGE_KEYS.RECORDS);
+      window.localStorage.removeItem(LOCAL_STORAGE_KEYS.SELECTED_IDS);
+      return;
+    }
+    window.localStorage.setItem(
+      LOCAL_STORAGE_KEYS.RECORDS,
+      JSON.stringify(records),
+    );
+
+    const validIds = Array.from(selectedIds).filter((id) =>
+      records.some((record) => record.id === id),
+    );
+    if (validIds.length === 0) {
+      window.localStorage.removeItem(LOCAL_STORAGE_KEYS.SELECTED_IDS);
+      return;
+    }
+    window.localStorage.setItem(
+      LOCAL_STORAGE_KEYS.SELECTED_IDS,
+      JSON.stringify(validIds),
+    );
+  }, [records, selectedIds]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    if (results.length === 0) {
+      window.localStorage.removeItem(LOCAL_STORAGE_KEYS.RESULTS);
+      return;
+    }
+    window.localStorage.setItem(
+      LOCAL_STORAGE_KEYS.RESULTS,
+      JSON.stringify(results),
+    );
+  }, [results]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    if (resultCsv) {
+      window.localStorage.setItem(LOCAL_STORAGE_KEYS.RESULT_CSV, resultCsv);
+    } else {
+      window.localStorage.removeItem(LOCAL_STORAGE_KEYS.RESULT_CSV);
+    }
+  }, [resultCsv]);
 
   const handleFileChange = useCallback(
     async (event: ChangeEvent<HTMLInputElement>) => {
@@ -571,7 +687,7 @@ export default function HomePage(): JSX.Element {
               CSV をインポートするとテーブルにデータが表示されます。
             </div>
           ) : (
-            <div className="mt-6 overflow-x-auto rounded-2xl border border-zinc-100">
+            <div className="mt-6 max-h-[28rem] overflow-x-auto overflow-y-auto rounded-2xl border border-zinc-100">
               <table className="min-w-full divide-y divide-zinc-100 text-left text-sm">
                 <thead className="bg-zinc-50 text-xs uppercase tracking-wide text-zinc-500">
                   <tr>
@@ -712,7 +828,7 @@ export default function HomePage(): JSX.Element {
             </div>
           </div>
           {results.length > 0 ? (
-            <div className="mt-6 overflow-x-auto rounded-2xl border border-zinc-100">
+            <div className="mt-6 max-h-[28rem] overflow-x-auto overflow-y-auto rounded-2xl border border-zinc-100">
               <table className="min-w-full divide-y divide-zinc-100 text-left text-sm">
                 <thead className="bg-zinc-50 text-xs uppercase tracking-wide text-zinc-500">
                   <tr>
