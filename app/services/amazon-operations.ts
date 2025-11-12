@@ -208,7 +208,7 @@ export const searchAinoriProduct = async (
     .getByTestId('omnibox-submit-button')
     .getByRole('button', { name: '検索' })
     .click();
-  await page.waitForTimeout(2000);
+  await page.waitForTimeout(4000);
 
   const noResultsLocator = page
     .getByText('検索クエリに一致する結果が見つかりません')
