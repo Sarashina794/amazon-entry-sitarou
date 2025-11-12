@@ -1,5 +1,7 @@
 export type EntryResult = {
   JANCode: string;
+  price?: number;
+  stock?: number;
   success: boolean;
   errorType?: ErrorType;
   errorMessage?: string;

@@ -76,12 +76,13 @@ function escapeCsvValue(value: string): string {
  * 出品結果の配列をダウンロード用 CSV テキストに変換します。
  */
 function buildResultCsv(results: EntryResult[]): string {
-  const header = 'JANCode,success,errorType,errorMessage';
+  const header = 'JAN,price,stock,errorType,errorMessage';
   const body = results
     .map((result) =>
       [
         result.JANCode,
-        String(result.success),
+        result.price?.toString() ?? '',
+        result.stock?.toString() ?? '',
         result.errorType ?? '',
         result.errorMessage ?? '',
       ]
@@ -251,11 +252,16 @@ export async function POST(
     let lastMessage: string | undefined;
     const accountToUse = ensureAccountName(accountName);
 
-    const pushResult = (result: EntryResult): void => {
+    const pushResult = (result: EntryResult, source: EntryItem): void => {
       if (result.errorMessage) {
         lastMessage = result.errorMessage;
       }
-      const nextResults = [...runState.results, result];
+      const enrichedResult: EntryResult = {
+        price: source.price,
+        stock: source.stock,
+        ...result,
+      };
+      const nextResults = [...runState.results, enrichedResult];
       runState.results = nextResults;
       runState.lastMessage = result.errorMessage ?? lastMessage;
     };
@@ -286,7 +292,7 @@ export async function POST(
         try {
           const searchResult = await searchAinoriProduct(page, record.JANCode);
           if (searchResult.error) {
-            pushResult(searchResult.error);
+            pushResult(searchResult.error, record);
             processed += 1;
             ensureProgressUpdate(processed, total);
             continue;
@@ -297,7 +303,7 @@ export async function POST(
             record,
           );
           if (entryResult) {
-            pushResult(entryResult);
+            pushResult(entryResult, record);
             processed += 1;
             ensureProgressUpdate(processed, total);
             continue;
@@ -305,7 +311,7 @@ export async function POST(
 
           const successResult = buildSuccessResult(record);
           lastMessage = '出品が完了しました。';
-          pushResult(successResult);
+          pushResult(successResult, record);
           processed += 1;
           ensureProgressUpdate(processed, total);
         } catch (error) {
@@ -325,7 +331,7 @@ export async function POST(
                     ? error.message
                     : '不明なエラーが発生しました。',
               };
-          pushResult(entryResult);
+          pushResult(entryResult, record);
           processed += 1;
           ensureProgressUpdate(processed, total);
           if (!isTimeoutError(error)) {

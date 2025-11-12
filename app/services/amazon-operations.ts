@@ -323,5 +323,7 @@ export const enterProductDetails = async (
  */
 export const buildSuccessResult = (item: EntryItem): EntryResult => ({
   JANCode: item.JANCode,
+  price: item.price,
+  stock: item.stock,
   success: true,
 });
