@@ -80,8 +80,9 @@ export const launchAmazonBrowser = async (
 ): Promise<LaunchedBrowser> => {
   const browser = await chromium.launch({
     headless: options.headless ?? false,
+    args: ['--lang=ja'],
   });
-  const context = await browser.newContext();
+  const context = await browser.newContext({locale: 'ja',});
   if (options.timeoutMs) {
     context.setDefaultTimeout(options.timeoutMs);
     context.setDefaultNavigationTimeout(options.timeoutMs);
