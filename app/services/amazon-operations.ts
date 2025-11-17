@@ -17,7 +17,7 @@ import {
 const SIGN_IN_URL =
   'https://sellercentral-japan.amazon.com/ap/signin?openid.pape.max_auth_age=0&openid.return_to=https%3A%2F%2Fsellercentral-japan.amazon.com%2Fproduct-search%3Fref%3Dxx_catadd_dnav_xx&openid.identity=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0%2Fidentifier_select&openid.assoc_handle=sc_jp_amazon_com_v2&openid.mode=checkid_setup&language=ja_JP&openid.claimed_id=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0%2Fidentifier_select&pageId=sc_amazon_v3_unified&openid.ns=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0&ssoResponse=eyJ6aXAiOiJERUYiLCJlbmMiOiJBMjU2R0NNIiwiYWxnIjoiQTI1NktXIn0.3152N7ZUUagOyopFtZ4LcJxdTpS7weHTCvE1EUsE7yatcMIwMn6w8g.pFOfbP0LqqhgGqUJ.S-bStnhvLnfEzi94Fk4gP41IZg4ViEanu-d0pn-t2iOeh-_pT8liZMTVjWQpchaFbe5B67dMuWPDCxhPOMdTH-LI5LLct7J0sDQS3Vgl1tBAPbfinRebXf5SL7VQ_w5FtDCIuS6XevH-jl-X8WLQjyMt40poU4bt_D4I-jQ1pF_0EycjymPrNGxX0g1tARsuA3prNeB3Rg.AK8IaQVjyWHwQhGYJzuXFA';
 const PRODUCT_SEARCH_URL =
-  'https://sellercentral-japan.amazon.com/product-search?ref=xx_catadd_dnav_xx';
+  'https://sellercentral-japan.amazon.com/product-search/keywords?ref=xx_catadd_dnav_xx';
 const EMAIL_INPUT_NAME = '携帯電話番号またはEメールアドレスを入力します';
 const PASSWORD_INPUT_NAME = 'パスワード';
 const OTP_INPUT_NAME = 'コードを入力する:';
