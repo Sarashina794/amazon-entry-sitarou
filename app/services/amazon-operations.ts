@@ -81,6 +81,7 @@ export const launchAmazonBrowser = async (
   const browser = await chromium.launch({
     headless: options.headless ?? false,
     args: ['--lang=ja'],
+    slowMo: 200
   });
   const context = await browser.newContext({locale: 'ja',});
   if (options.timeoutMs) {
