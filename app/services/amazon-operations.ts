@@ -193,8 +193,10 @@ export const signInAmazon = async (
  */
 export const searchAinoriProduct = async (
   page: Page,
-  JANCode: string,
+  searchValue: string,
+  identifierForResult?: string,
 ): Promise<SearchProductResult> => {
+  const resultIdentifier = identifierForResult ?? searchValue;
   await page.goto(PRODUCT_SEARCH_URL, { waitUntil: 'domcontentloaded' });
 
   const searchBox = page
@@ -204,7 +206,7 @@ export const searchAinoriProduct = async (
     .first();
   await searchBox.waitFor({ state: 'visible' });
   await searchBox.click();
-  await searchBox.fill(JANCode);
+  await searchBox.fill(searchValue);
 
   await page
     .getByTestId('omnibox-submit-button')
@@ -218,7 +220,7 @@ export const searchAinoriProduct = async (
   if (await noResultsLocator.count()) {
     return {
       error: {
-        JANCode,
+        JANCode: resultIdentifier,
         success: false,
         errorType: ERROR_TYPE.NOT_FOUND,
         errorMessage: '相乗り出品できない商品です',
@@ -238,7 +240,7 @@ export const searchAinoriProduct = async (
     await brandRestrictionLocator.waitFor({ state: 'visible', timeout: 3000 });
     return {
       error: {
-        JANCode,
+        JANCode: resultIdentifier,
         success: false,
         errorType: ERROR_TYPE.BLAND_ENTRY,
         errorMessage: 'ブランドの出品許可が必要なためスキップしました。',

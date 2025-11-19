@@ -46,6 +46,8 @@ interface PublicRunState {
   currentProductId?: string;
   lastMessage?: string;
   resultCsv?: string;
+  identifierLabel?: string;
+  searchType?: 'JAN' | 'ASIN';
 }
 
 interface InternalRunState extends PublicRunState {
@@ -60,6 +62,8 @@ let runState: InternalRunState = {
   status: 'idle',
   progress: { total: 0, processed: 0 },
   results: [],
+  identifierLabel: 'JAN',
+  searchType: 'JAN',
 };
 
 /**
@@ -75,8 +79,11 @@ function escapeCsvValue(value: string): string {
 /**
  * 出品結果の配列をダウンロード用 CSV テキストに変換します。
  */
-function buildResultCsv(results: EntryResult[]): string {
-  const header = 'JAN,price,stock,errorType,errorMessage';
+function buildResultCsv(
+  results: EntryResult[],
+  identifierLabel = 'JAN',
+): string {
+  const header = `${identifierLabel},price,stock,errorType,errorMessage`;
   const body = results
     .map((result) =>
       [
@@ -162,10 +169,18 @@ export async function POST(
     );
   }
 
+  const identifierLabel = (payload.identifierLabel ?? 'JAN').trim() || 'JAN';
+  const searchType: 'JAN' | 'ASIN' = payload.searchType === 'ASIN' ? 'ASIN' : 'JAN';
+
   const sanitizedRecords: EntryItem[] = records.map((record) => {
     const janValue =
       (record as EntryItem).JANCode ??
       (record as { productId?: string }).productId ??
+      '';
+    const searchValue =
+      (record as EntryItem).searchCode ??
+      (record as { searchCode?: string }).searchCode ??
+      (record as { searchValue?: string }).searchValue ??
       '';
     const priceValue = Number(
       (record as EntryItem).price ?? (record as { price?: number | string }).price,
@@ -173,17 +188,20 @@ export async function POST(
     const stockValue = Number(
       (record as EntryItem).stock ?? (record as { stock?: number | string }).stock,
     );
+    const normalizedEntry = String(janValue).trim();
+    const normalizedSearch = String(searchValue || normalizedEntry).trim();
 
     return {
-      JANCode: String(janValue).trim(),
+      JANCode: normalizedEntry,
       price: priceValue,
       stock: stockValue,
+      searchCode: normalizedSearch,
     };
   });
 
   if (sanitizedRecords.some((record) => !record.JANCode)) {
     return NextResponse.json(
-      { error: 'JAN が空のレコードがあります。' },
+      { error: `${identifierLabel} が空のレコードがあります。` },
       { status: 400 },
     );
   }
@@ -220,6 +238,8 @@ export async function POST(
     currentProductId: undefined,
     lastMessage: undefined,
     resultCsv: undefined,
+    identifierLabel,
+    searchType,
   };
 
   const runPromise = (async () => {
@@ -290,7 +310,11 @@ export async function POST(
         lastMessage = undefined;
 
         try {
-          const searchResult = await searchAinoriProduct(page, record.JANCode);
+          const searchResult = await searchAinoriProduct(
+            page,
+            record.searchCode ?? record.JANCode,
+            record.JANCode,
+          );
           if (searchResult.error) {
             pushResult(searchResult.error, record);
             processed += 1;
@@ -342,7 +366,10 @@ export async function POST(
 
       runState.finishedAt = Date.now();
       runState.status = controller.signal.aborted ? 'aborted' : 'completed';
-      runState.resultCsv = buildResultCsv(runState.results);
+      runState.resultCsv = buildResultCsv(
+        runState.results,
+        runState.identifierLabel,
+      );
       runState.currentProductId = undefined;
       runState.controller = undefined;
     } finally {
@@ -368,7 +395,10 @@ export async function POST(
       runState.error =
         error instanceof Error ? error.message : '不明なエラーが発生しました。';
     }
-    runState.resultCsv = buildResultCsv(runState.results);
+    runState.resultCsv = buildResultCsv(
+      runState.results,
+      runState.identifierLabel,
+    );
     runState.controller = undefined;
   });
 
