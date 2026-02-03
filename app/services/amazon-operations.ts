@@ -279,7 +279,7 @@ export const enterProductDetails = async (
 
   await listingPage
     .locator('kat-box')
-    .filter({ hasText: '私はこの商品を自分で発送します' })
+    .filter({ hasText: '（出品者出荷）' })
     .click();
 
   const inventoryInput = listingPage.getByRole('spinbutton', { name: '在庫数' });
